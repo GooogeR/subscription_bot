@@ -43,13 +43,33 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 		text := update.Message.Text
 
 		switch {
+		case strings.HasPrefix(text, "/admin extendsub"):
+			if telegramID != adminTelegramID {
+				msg := tgbotapi.NewMessage(chatID, "❌ У вас нет прав для выполнения этой команды.")
+				bot.Send(msg)
+			} else {
+				handleAdminExtendSubCommand(bot, chatID, db, text)
+			}
+
+		case strings.HasPrefix(text, "/admin removesub"):
+			if telegramID != adminTelegramID {
+				msg := tgbotapi.NewMessage(chatID, "❌ У вас нет прав для выполнения этой команды.")
+				bot.Send(msg)
+			} else {
+				handleAdminRemoveSubCommand(bot, chatID, db, text)
+			}
 		case text == "/start":
 			registerUser(db, telegramID, userName)
 			msg := tgbotapi.NewMessage(chatID, "Ты зарегистрирован, Добро пожаловать!")
 			bot.Send(msg)
 
 		case text == "/clients":
-			handleClientsCommand(bot, chatID, db) // <-- передаем db
+			if telegramID != adminTelegramID {
+				msg := tgbotapi.NewMessage(chatID, "❌ У вас нет прав для выполнения этой команды.")
+				bot.Send(msg)
+			} else {
+				handleClientsCommand(bot, chatID, db)
+			}
 
 		case text == "/status":
 			handleStatusCommand(bot, chatID, db, telegramID, adminTelegramID)
@@ -132,8 +152,21 @@ func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB) {
 		if username == "" {
 			username = "(без username)"
 		}
-		text += fmt.Sprintf("%d) @%s — ID: %d\n", i+1, username, user.TelegramID)
-		if i >= 49 { // максимум 50 пользователей в списке
+
+		// Получаем самую свежую активную подписку
+		var sub models.Subscription
+		db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).
+			Order("expires_at DESC").
+			First(&sub)
+
+		subInfo := "— без подписки"
+		if sub.ID != 0 {
+			subInfo = fmt.Sprintf("— до %s", sub.ExpiresAt.Format("02-01-2006"))
+		}
+
+		text += fmt.Sprintf("%d) @%s — ID: %d %s\n", i+1, username, user.TelegramID, subInfo)
+
+		if i >= 49 {
 			text += "... (показано первые 50)\n"
 			break
 		}
@@ -395,4 +428,81 @@ func extractPublicKeyFromConf(conf string) string {
 		}
 	}
 	return ""
+}
+
+func handleAdminExtendSubCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, text string) {
+	parts := strings.SplitN(text, " ", 4)
+	if len(parts) < 4 {
+		msg := tgbotapi.NewMessage(chatID, "Формат: /admin extendsub <telegramID> <дни>")
+		bot.Send(msg)
+		return
+	}
+
+	telegramID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Неверный Telegram ID.")
+		bot.Send(msg)
+		return
+	}
+
+	days, err := strconv.Atoi(parts[3])
+	if err != nil || days <= 0 {
+		msg := tgbotapi.NewMessage(chatID, "Количество дней должно быть положительным числом.")
+		bot.Send(msg)
+		return
+	}
+
+	var user models.User
+	if err := db.First(&user, "telegram_id = ?", telegramID).Error; err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Пользователь не найден.")
+		bot.Send(msg)
+		return
+	}
+
+	var sub models.Subscription
+	now := time.Now()
+	if err := db.Where("user_id = ? AND expires_at > ?", user.ID, now).First(&sub).Error; err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Активная подписка не найдена.")
+		bot.Send(msg)
+		return
+	}
+
+	sub.ExpiresAt = sub.ExpiresAt.AddDate(0, 0, days)
+	db.Save(&sub)
+
+	msg := tgbotapi.NewMessage(chatID,
+		fmt.Sprintf("✅ Подписка пользователя @%s продлена на %d дней. Новая дата: %s",
+			user.Username, days, sub.ExpiresAt.Format("02.01.2006")),
+	)
+	bot.Send(msg)
+}
+
+func handleAdminRemoveSubCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, text string) {
+	parts := strings.SplitN(text, " ", 3)
+	if len(parts) < 3 {
+		msg := tgbotapi.NewMessage(chatID, "Формат: /admin removesub <telegramID>")
+		bot.Send(msg)
+		return
+	}
+
+	telegramID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Неверный Telegram ID.")
+		bot.Send(msg)
+		return
+	}
+
+	var user models.User
+	if err := db.First(&user, "telegram_id = ?", telegramID).Error; err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Пользователь не найден.")
+		bot.Send(msg)
+		return
+	}
+
+	db.Where("user_id = ?", user.ID).Delete(&models.Subscription{})
+
+	msg := tgbotapi.NewMessage(chatID,
+		fmt.Sprintf("🗑️ Подписки пользователя @%s удалены.", user.Username),
+	)
+	bot.Send(msg)
 }
