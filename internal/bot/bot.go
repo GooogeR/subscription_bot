@@ -22,6 +22,8 @@ var selectedUserIndex = make(map[int64]int)
 
 var bindStep = make(map[int64]string)
 var pendingBindKey = make(map[int64]string)
+var unbindStep = make(map[int64]bool)
+var cachedUserDevices = make(map[int64][]models.Device)
 
 func RunBot(db *gorm.DB, adminTelegramID int64) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -62,6 +64,36 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 				userName := update.Message.From.UserName
 				telegramID := update.Message.From.ID
 				text := update.Message.Text
+
+				// --- Добавленная логика для отвязки устройства ---
+				if unbindStep[telegramID] {
+					index, err := strconv.Atoi(strings.TrimSpace(text))
+					if err != nil || index < 1 {
+						bot.Send(tgbotapi.NewMessage(chatID, "❌ Пожалуйста, введите корректный номер устройства."))
+						return
+					}
+
+					devices, ok := cachedUserDevices[telegramID]
+					if !ok || index > len(devices) {
+						bot.Send(tgbotapi.NewMessage(chatID, "❌ Устройство с таким номером не найдено."))
+						return
+					}
+
+					device := devices[index-1]
+
+					if err := db.Delete(&device).Error; err != nil {
+						bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при отвязке устройства. Попробуйте позже."))
+						return
+					}
+					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Устройство *%s* успешно отвязано.", device.DeviceName))
+					msg.ParseMode = "Markdown"
+					msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
+					bot.Send(msg)
+
+					delete(unbindStep, telegramID)
+					delete(cachedUserDevices, telegramID)
+					return
+				}
 
 				if step, ok := bindStep[telegramID]; ok {
 					switch step {
@@ -124,6 +156,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 							msg := tgbotapi.NewMessage(chatID,
 								fmt.Sprintf("✅ Устройство *%s* успешно привязано!\n🔐 Public Key: `%s`", deviceName, publicKey))
 							msg.ParseMode = "Markdown"
+							msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
 							bot.Send(msg)
 						}
 
@@ -173,7 +206,6 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					bot.Send(msg)
 					return
 				}
-
 				// Остальная логика сообщений
 				switch {
 				case strings.HasPrefix(text, "/admin extendsub"):
@@ -214,15 +246,6 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 
 				case strings.HasPrefix(text, "/bind"):
 					handleBindCommand(bot, chatID, db, telegramID, text)
-
-				case strings.HasPrefix(text, "/unbind"):
-					if telegramID != adminTelegramID {
-						msg := tgbotapi.NewMessage(chatID, "❌ Извините, эта команда доступна только администратору.")
-						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
-						bot.Send(msg)
-					} else {
-						handleUnbindCommand(bot, chatID, db, telegramID, text)
-					}
 
 				case text == "/admin users":
 					if telegramID != adminTelegramID {
@@ -272,6 +295,36 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 				}
 
 				switch data {
+				case "unbind":
+					var user models.User
+					if err := db.First(&user, "telegram_id = ?", telegramID).Error; err != nil {
+						msg := tgbotapi.NewMessage(chatID, "Вы ещё не зарегистрированы. Напишите /start")
+						bot.Send(msg)
+						return
+					}
+
+					var devices []models.Device
+					db.Where("user_id = ?", user.ID).Find(&devices)
+
+					if len(devices) == 0 {
+						msg := tgbotapi.NewMessage(chatID, "⚠️ У вас нет привязанных устройств.")
+						bot.Send(msg)
+						return
+					}
+
+					cachedUserDevices[telegramID] = devices
+					unbindStep[telegramID] = true
+
+					text := "📱 Ваши устройства:\n"
+					for i, d := range devices {
+						text += fmt.Sprintf("%d) %s — `%s`\n", i+1, d.DeviceName, d.PublicKey)
+					}
+					text += "\nВведите номер устройства для отвязки."
+
+					msg := tgbotapi.NewMessage(chatID, text)
+					msg.ParseMode = "Markdown"
+					bot.Send(msg)
+
 				case "sub_add_30", "sub_add_90", "sub_add_180", "sub_add_360":
 					handleSubscriptionAdd(bot, db, telegramID, chatID, data)
 				case "sub_add_delete":
@@ -290,16 +343,6 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					bindStep[telegramID] = "awaiting_public_key"
 					msg := tgbotapi.NewMessage(chatID, "🔐 Введите ваш Public Key (44 символа).")
 					bot.Send(msg)
-				case "unbind":
-					if telegramID != adminTelegramID {
-						msg := tgbotapi.NewMessage(chatID, "❌ Только администратор может отвязывать устройства.")
-						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
-						bot.Send(msg)
-					} else {
-						msg := tgbotapi.NewMessage(chatID, "Чтобы отвязать устройство, отправьте команду в формате:\n/unbind <номер устройства>")
-						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
-						bot.Send(msg)
-					}
 				case "addsub":
 					if telegramID != adminTelegramID {
 						msg := tgbotapi.NewMessage(chatID, "❌ Только администратор может добавлять подписки.")
@@ -587,47 +630,6 @@ func handleBindCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, telegram
 	db.Create(&device)
 
 	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Устройство *%s* успешно привязано!\n🔐 Public Key: `%s`", deviceName, publicKey))
-	msg.ParseMode = "Markdown"
-	msg.ReplyMarkup = getMainMenuKeyboard(true)
-	bot.Send(msg)
-}
-
-func handleUnbindCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, telegramID int64, text string) {
-	// Эту функцию вызываем только для admin, проверка есть в RunBot
-	parts := strings.Fields(text)
-	if len(parts) < 2 {
-		msg := tgbotapi.NewMessage(chatID, "Укажите номер устройства для отвязки.\nПример: /unbind 2")
-		msg.ReplyMarkup = getMainMenuKeyboard(true)
-		bot.Send(msg)
-		return
-	}
-
-	index, err := strconv.Atoi(parts[1])
-	if err != nil || index < 1 {
-		msg := tgbotapi.NewMessage(chatID, "Неверный номер устройства.")
-		msg.ReplyMarkup = getMainMenuKeyboard(true)
-		bot.Send(msg)
-		return
-	}
-
-	var devices []models.Device
-	db.Find(&devices)
-	if index > len(devices) {
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Устройство с номером %d не найдено.", index))
-		msg.ReplyMarkup = getMainMenuKeyboard(true)
-		bot.Send(msg)
-		return
-	}
-
-	device := devices[index-1]
-
-	var user models.User
-	db.First(&user, device.UserID)
-
-	db.Delete(&device)
-
-	msgText := fmt.Sprintf("✅ Устройство *%s* (PublicKey: `%s`) успешно отвязано у пользователя @%s", device.DeviceName, device.PublicKey, user.Username)
-	msg := tgbotapi.NewMessage(chatID, msgText)
 	msg.ParseMode = "Markdown"
 	msg.ReplyMarkup = getMainMenuKeyboard(true)
 	bot.Send(msg)
