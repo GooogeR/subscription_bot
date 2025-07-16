@@ -193,7 +193,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						return
 					}
 
-					users, ok := cachedUsers[telegramID]
+					users, ok := cachedUsers[adminTelegramID]
 					if !ok || num > len(users) {
 						msg := tgbotapi.NewMessage(chatID, "Такого номера клиента нет.")
 						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
@@ -368,7 +368,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					} else {
 						var users []models.User
 						db.Find(&users)
-						cachedUsers[telegramID] = users
+						cachedUsers[adminTelegramID] = users
 						addSubStep[telegramID] = "awaiting_user_selection"
 
 						textList := "Клиенты:\n"
@@ -405,7 +405,7 @@ func handleSubscriptionAdd(bot *tgbotapi.BotAPI, db *gorm.DB, telegramID, chatID
 		return
 	}
 
-	users, ok := cachedUsers[telegramID]
+	users, ok := cachedUsers[adminTelegramID]
 	if !ok || len(users) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов не найден."))
 		return
@@ -469,7 +469,7 @@ func handleSubscriptionAdd(bot *tgbotapi.BotAPI, db *gorm.DB, telegramID, chatID
 func handleSubscriptionDelete(bot *tgbotapi.BotAPI, db *gorm.DB, telegramID, chatID int64) {
 	log.Printf("[INFO] Обработка удаления подписки для telegramID=%d", telegramID)
 
-	users, ok := cachedUsers[telegramID]
+	users, ok := cachedUsers[adminTelegramID]
 	if !ok || len(users) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов не найден."))
 		return
@@ -534,7 +534,7 @@ func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, telegramID int64, 
 	}
 
 	// Обновляем кэш
-	cachedUsers[telegramID] = users
+	cachedUsers[adminTelegramID] = users
 
 	text := fmt.Sprintf("👥 Зарегистрированные пользователи (%d):\n\n", len(users))
 	for i, user := range users {
@@ -1021,7 +1021,7 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	users, ok := cachedUsers[telegramID]
+	users, ok := cachedUsers[adminTelegramID]
 	if !ok {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов пуст. Пожалуйста, сначала вызовите список клиентов."))
 		log.Printf("handleSetSubCommand: cachedUsers[%d] not found or empty", telegramID)
