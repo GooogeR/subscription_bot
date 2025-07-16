@@ -4,7 +4,7 @@ import "time"
 
 type User struct {
 	ID          int64 `gorm:"primaryKey"`
-	TelegramID  int64 `gorm:"uniqueIndex"`
+	TelegramID  int64 `gorm:"column:telegram_id"`
 	Username    string
 	WGPublicKey string
 	CreatedAt   time.Time
