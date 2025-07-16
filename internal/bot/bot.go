@@ -18,7 +18,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
 var adminTelegramID int64
 var addSubStep = make(map[int64]string)
 var cachedUsers = make(map[int64][]models.User)
@@ -180,14 +179,10 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						return
 					}
 				}
-<<<<<<< HEAD
-=======
 				if update.Message != nil && strings.HasPrefix(update.Message.Text, "/setsub") {
 					handleSetSubCommand(bot, update, db)
 					return
 				}
->>>>>>> dev
-
 				// Обработка состояния добавления подписки
 				if step, ok := addSubStep[telegramID]; ok && step == "awaiting_user_selection" {
 					num, err := strconv.Atoi(text)
@@ -990,6 +985,7 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 		}
 	}
 	return result
+}
 
 func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB) {
 	chatID := update.Message.Chat.ID
