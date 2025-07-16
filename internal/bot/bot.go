@@ -180,7 +180,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					}
 				}
 				if update.Message != nil && strings.HasPrefix(update.Message.Text, "/setsub") {
-					handleSetSubCommand(bot, update, db, adminTelegramID, cachedUsers)
+					handleSetSubCommand(bot, update, db, adminTelegramID)
 					return
 				}
 				// Обработка состояния добавления подписки
@@ -255,7 +255,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
 						bot.Send(msg)
 					} else {
-						handleClientsCommand(bot, chatID, telegramID, db, cachedUsers)
+						handleClientsCommand(bot, chatID, telegramID, db)
 					}
 
 				case text == "/status":
@@ -354,7 +354,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						msg.ReplyMarkup = getMainMenuKeyboard(false)
 						bot.Send(msg)
 					} else {
-						handleClientsCommand(bot, chatID, telegramID, db, cachedUsers)
+						handleClientsCommand(bot, chatID, telegramID, db)
 					}
 				case "bind":
 					bindStep[telegramID] = "awaiting_public_key"
@@ -516,25 +516,20 @@ func registerUser(db *gorm.DB, telegramID int64, username string) {
 	}
 }
 
-func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, telegramID int64, db *gorm.DB, cachedUsers map[int64][]models.User) {
+func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, adminTelegramID int64, db *gorm.DB) {
 	var users []models.User
-	result := db.Find(&users)
-	if result.Error != nil {
-		msg := tgbotapi.NewMessage(chatID, "Ошибка при получении пользователей из базы данных.")
-		msg.ReplyMarkup = getMainMenuKeyboard(true)
-		bot.Send(msg)
+	err := db.Find(&users).Error
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при получении пользователей из базы."))
 		return
 	}
+
+	cachedUsers[adminTelegramID] = users // Обновляем кэш
 
 	if len(users) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "Пользователи не найдены.")
-		msg.ReplyMarkup = getMainMenuKeyboard(true)
-		bot.Send(msg)
+		bot.Send(tgbotapi.NewMessage(chatID, "Пользователи не найдены."))
 		return
 	}
-
-	// Обновляем кэш
-	cachedUsers[adminTelegramID] = users
 
 	text := fmt.Sprintf("👥 Зарегистрированные пользователи (%d):\n\n", len(users))
 	for i, user := range users {
@@ -543,6 +538,7 @@ func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, telegramID int64, 
 			username = "(без username)"
 		}
 
+		// Получаем активную подписку
 		var sub models.Subscription
 		db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).
 			Order("expires_at DESC").
@@ -562,7 +558,6 @@ func handleClientsCommand(bot *tgbotapi.BotAPI, chatID int64, telegramID int64, 
 	}
 
 	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ReplyMarkup = getMainMenuKeyboard(true)
 	bot.Send(msg)
 }
 
@@ -988,13 +983,13 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 	return result
 }
 
-func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, adminTelegramID int64, cachedUsers map[int64][]models.User) {
+func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, adminTelegramID int64) {
 	chatID := update.Message.Chat.ID
-	telegramID := update.Message.From.ID
 	text := update.Message.Text
 
-	if telegramID != adminTelegramID {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
+	users, ok := cachedUsers[adminTelegramID]
+	if !ok || len(users) == 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов пуст. Пожалуйста, сначала вызовите команду 'Клиенты'."))
 		return
 	}
 
@@ -1005,8 +1000,8 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 	}
 
 	userIndex, err := strconv.Atoi(parts[1])
-	if err != nil || userIndex < 1 {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный номер пользователя"))
+	if err != nil || userIndex < 1 || userIndex > len(users) {
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Неверный номер пользователя. Доступны номера от 1 до %d.", len(users))))
 		return
 	}
 
@@ -1021,28 +1016,12 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	users, ok := cachedUsers[adminTelegramID]
-	if !ok {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов пуст. Пожалуйста, сначала вызовите список клиентов."))
-		log.Printf("handleSetSubCommand: cachedUsers[%d] not found or empty", telegramID)
-		return
-	}
-
-	log.Printf("handleSetSubCommand: cachedUsers[%d] = %+v", telegramID, users)
-
-	if userIndex > len(users) {
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Пользователь с номером %d не найден. Всего клиентов: %d", userIndex, len(users))))
-		return
-	}
-
 	user := users[userIndex-1]
 
-	// Здесь обновляем подписку в базе, пример:
 	var sub models.Subscription
-	err = db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).Order("expires_at desc").First(&sub).Error
+	err = db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).Order("expires_at DESC").First(&sub).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Если подписка не найдена — создаём новую
 			sub = models.Subscription{
 				UserID:    user.ID,
 				ExpiresAt: date,
@@ -1056,7 +1035,6 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 			return
 		}
 	} else {
-		// Если подписка есть — обновляем дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
@@ -1064,5 +1042,5 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		}
 	}
 
-	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка для пользователя %s успешно обновлена до %s", user.Username, date.Format("02-01-2006"))))
+	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка пользователя @%s обновлена до %s", user.Username, date.Format("02-01-2006"))))
 }
