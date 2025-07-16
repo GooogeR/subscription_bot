@@ -986,10 +986,10 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, adminTelegramID int64) {
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
+	telegramID := update.Message.From.ID
 
-	users, ok := cachedUsers[adminTelegramID]
-	if !ok || len(users) == 0 {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов пуст. Пожалуйста, сначала вызовите команду 'Клиенты'."))
+	if telegramID != adminTelegramID {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
 		return
 	}
 
@@ -1000,8 +1000,8 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 	}
 
 	userIndex, err := strconv.Atoi(parts[1])
-	if err != nil || userIndex < 1 || userIndex > len(users) {
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Неверный номер пользователя. Доступны номера от 1 до %d.", len(users))))
+	if err != nil || userIndex < 1 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный номер пользователя"))
 		return
 	}
 
@@ -1016,17 +1016,28 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
+	// Подгружаем список пользователей из базы
+	var users []models.User
+	if err := db.Find(&users).Error; err != nil || len(users) == 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка получения списка клиентов или список пуст"))
+		return
+	}
+
+	if userIndex > len(users) {
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Пользователь с номером %d не найден. Всего клиентов: %d", userIndex, len(users))))
+		return
+	}
+
 	user := users[userIndex-1]
 
 	var sub models.Subscription
 	err = db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).Order("expires_at DESC").First(&sub).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Подписка не найдена — создаём новую с нужной датой
 			sub = models.Subscription{
 				UserID:    user.ID,
 				ExpiresAt: date,
-				Title:     "Подписка", // Если есть поле Title, добавь здесь
+				Title:     "Подписка",
 				CreatedAt: time.Now(),
 			}
 			if err := db.Create(&sub).Error; err != nil {
@@ -1034,12 +1045,10 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 				return
 			}
 		} else {
-			// Другие ошибки — логируем и сообщаем
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при поиске подписки"))
 			return
 		}
 	} else {
-		// Подписка есть — обновляем дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
@@ -1047,5 +1056,5 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		}
 	}
 
-	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка пользователя @%s обновлена до %s", user.Username, date.Format("02-01-2006"))))
+	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка пользователя @%s успешно обновлена до %s", user.Username, date.Format("02-01-2006"))))
 }
