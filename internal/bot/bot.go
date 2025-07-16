@@ -1002,13 +1002,13 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 
 	parts := strings.Fields(text)
 	if len(parts) != 3 {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат. Используйте: /setsub <номер_пользователя> <дд-мм-гггг>"))
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат. Используйте: /setsub <telegram_id> <дд-мм-гггг>"))
 		return
 	}
 
-	userIndex, err := strconv.Atoi(parts[1])
-	if err != nil || userIndex < 1 {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный номер пользователя"))
+	targetTelegramID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || targetTelegramID <= 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный Telegram ID пользователя"))
 		return
 	}
 
@@ -1023,36 +1023,29 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	// Получаем список пользователей из базы
-	var users []models.User
-	if err := db.Find(&users).Error; err != nil {
-		log.Printf("Ошибка при получении пользователей из базы: %v", err)
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при получении списка клиентов"))
+	// Ищем пользователя по Telegram ID
+	var user models.User
+	err = db.Where("telegram_id = ?", targetTelegramID).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных"))
+			log.Printf("Ошибка при поиске пользователя: %v", err)
+		}
 		return
 	}
-
-	if len(users) == 0 {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Список клиентов пуст"))
-		return
-	}
-
-	if userIndex > len(users) {
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Пользователь с номером %d не найден. Всего клиентов: %d", userIndex, len(users))))
-		return
-	}
-
-	user := users[userIndex-1]
 
 	now := time.Now()
 
-	// Теперь отдельно ищем подписку
+	// Ищем активную подписку
 	var sub models.Subscription
 	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).
 		Order("expires_at DESC").
 		First(&sub).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// Подписка не найдена — создаём новую
+		// Создаём новую подписку
 		newSub := models.Subscription{
 			UserID:    user.ID,
 			Title:     "Подписка",
@@ -1060,20 +1053,16 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 			CreatedAt: now,
 		}
 		if err := db.Create(&newSub).Error; err != nil {
-			log.Printf("Ошибка при создании подписки: %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки."))
 			return
 		}
 	} else if err != nil {
-		// Другая ошибка базы
-		log.Printf("Ошибка при поиске подписки: %v", err)
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных."))
 		return
 	} else {
-		// Подписка есть — обновляем дату
+		// Обновляем дату подписки
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
-			log.Printf("Ошибка при обновлении подписки: %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки."))
 			return
 		}
