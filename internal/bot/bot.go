@@ -11,11 +11,13 @@ import (
 	"subscription_bot/internal/wireguard"
 	"time"
 
+	"github.com/joho/godotenv"
+	"github.com/robfig/cron/v3"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"gorm.io/gorm"
 )
 
-// Для механизма добавления подписки по номеру клиента
 var addSubStep = make(map[int64]string)
 var cachedUsers = make(map[int64][]models.User)
 var selectedUserIndex = make(map[int64]int)
@@ -24,18 +26,23 @@ var bindStep = make(map[int64]string)
 var pendingBindKey = make(map[int64]string)
 var unbindStep = make(map[int64]bool)
 var cachedUserDevices = make(map[int64][]models.Device)
+var unlimitedUsers = make(map[int64]bool)
 
 func RunBot(db *gorm.DB, adminTelegramID int64) {
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("⚠️ Не удалось загрузить .env файл, используем переменные окружения.")
+	}
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
 		log.Fatalf("Telegram bot token не установлен")
 	}
 
 	bot, err := tgbotapi.NewBotAPI(token)
+	unlimitedUsers = parseUnlimitedUsers(os.Getenv("UNLIMITED_USERS"))
 	if err != nil {
 		log.Panic(err)
 	}
-
 	log.Printf("Авторизован как: %s", bot.Self.UserName)
 
 	// Запуск периодической проверки напоминаний о подписках
@@ -50,6 +57,12 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 	u.Timeout = 60
 
 	updates := bot.GetUpdatesChan(u)
+
+	c := cron.New(cron.WithLocation(time.FixedZone("MSK", 3*60*60))) // МСК
+	c.AddFunc("0 13 * * *", func() {
+		checkSubscriptionReminders(bot, db)
+	})
+	c.Start()
 
 	for update := range updates {
 		func() {
@@ -568,8 +581,8 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, telegr
 
 	statusText := ""
 
-	if telegramID == adminTelegramID {
-		statusText += "✅ Статус: Активен (неограниченная подписка)\n"
+	if unlimitedUsers[telegramID] {
+		statusText += "✅ Статус: Активен (Неограниченная подписка)\n"
 	} else if subscription.ID != 0 {
 		statusText += fmt.Sprintf("✅ Статус: Активен\n⏳ Подписка до: %s\n", subscription.ExpiresAt.Format("02-01-2006"))
 	} else {
@@ -929,6 +942,9 @@ func checkSubscriptionReminders(bot *tgbotapi.BotAPI, db *gorm.DB) {
 		}
 
 		for _, sub := range subs {
+			if unlimitedUsers[sub.User.TelegramID] {
+				continue
+			}
 			if sub.User.TelegramID == 0 {
 				log.Printf("Подписка %d не имеет связанного пользователя", sub.ID)
 				continue
@@ -951,4 +967,18 @@ func checkSubscriptionReminders(bot *tgbotapi.BotAPI, db *gorm.DB) {
 			}
 		}
 	}
+}
+func parseUnlimitedUsers(env string) map[int64]bool {
+	result := make(map[int64]bool)
+	for _, idStr := range strings.Split(env, ",") {
+		idStr = strings.TrimSpace(idStr)
+		if idStr == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err == nil {
+			result[id] = true
+		}
+	}
+	return result
 }
