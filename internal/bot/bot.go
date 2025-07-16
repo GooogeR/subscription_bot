@@ -987,20 +987,12 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
 
-	if update.Message == nil {
-		log.Println("handleSetSubCommand: update.Message is nil")
-		return
-	}
-
-	text := update.Message.Text
-	log.Printf("handleSetSubCommand called by telegramID=%d with text=%s", telegramID, text)
-
 	if telegramID != adminTelegramID {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
 		return
 	}
 
-	parts := strings.Fields(text)
+	parts := strings.Fields(update.Message.Text)
 	if len(parts) != 3 {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат. Используйте: /setsub <telegram_id> <дд-мм-гггг>"))
 		return
@@ -1023,15 +1015,17 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	// Ищем пользователя по Telegram ID
+	log.Printf("Поиск пользователя с telegram_id = %d", targetTelegramID)
+
 	var user models.User
 	err = db.Where("telegram_id = ?", targetTelegramID).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("Пользователь с telegram_id=%d не найден в базе", targetTelegramID)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден"))
 		} else {
+			log.Printf("Ошибка поиска пользователя: %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных"))
-			log.Printf("Ошибка при поиске пользователя: %v", err)
 		}
 		return
 	}
