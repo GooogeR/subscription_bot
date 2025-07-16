@@ -1,66 +1,38 @@
 package wireguard
 
 import (
-	"bytes"
-	"encoding/base64"
 	"errors"
+	"fmt"
 	"os/exec"
-	"strings"
-	"subscription_bot/internal/models" // импорт структуры WGClient из models
 )
 
-func GetClientsFromDocker() ([]models.WGClient, error) {
-	cmd := exec.Command("docker", "exec", "wg-easy", "wg", "show", "all", "allowed-ips")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-
-	lines := strings.Split(out.String(), "\n")
-	clients := []models.WGClient{} // теперь models.WGClient
-
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		clients = append(clients, models.WGClient{
-			PublicKey:  parts[0],
-			AllowedIPs: parts[1],
-		})
-	}
-
-	return clients, nil
-}
-
-// Проверяет, что строка состоит из base64-символов
-func isBase64(s string) bool {
-	for _, c := range s {
-		if !((c >= 'A' && c <= 'Z') ||
-			(c >= 'a' && c <= 'z') ||
-			(c >= '0' && c <= '9') ||
-			c == '+' || c == '/' || c == '=') {
-			return false
-		}
-	}
-	return true
-}
-
-// Проверяет и декодирует base64 строку QR-кода в []byte
-func DecodeQRCodeBase64(qrBase64 string) ([]byte, error) {
-	if !isBase64(qrBase64) {
-		return nil, errors.New("строка не является корректным base64")
-	}
-
-	data, err := base64.StdEncoding.DecodeString(qrBase64)
+// AddClientViaDocker создает клиента WireGuard через Docker и возвращает конфиг, QR-код и ошибку
+func AddClientViaDocker(deviceName string) (string, []byte, error) {
+	// Здесь должен быть код запуска Docker контейнера wg-easy для создания клиента
+	// Например (пример условный):
+	out, err := exec.Command("docker", "exec", "wg-easy", "add-client", deviceName).Output()
 	if err != nil {
-		return nil, err
+		return "", nil, fmt.Errorf("ошибка добавления клиента: %w", err)
 	}
 
-	return data, nil
+	config := string(out)
+	qr := generateQRCode(config) // Функция генерации QR-кода (реализуй отдельно)
+
+	return config, qr, nil
+}
+
+func generateQRCode(config string) []byte {
+	// Логика генерации QR из конфига (можно использовать сторонние библиотеки)
+	// Возвращаем PNG в []byte
+	return []byte{}
+}
+
+// Можно добавить функции удаления клиента, обновления и т.д.
+func RemoveClient(deviceName string) error {
+	// Пример вызова docker для удаления клиента
+	cmd := exec.Command("docker", "exec", "wg-easy", "remove-client", deviceName)
+	if err := cmd.Run(); err != nil {
+		return errors.New("ошибка удаления клиента: " + err.Error())
+	}
+	return nil
 }
