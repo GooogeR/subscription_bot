@@ -806,21 +806,32 @@ func handleAdminRemoveSubCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB
 
 // getMainMenuKeyboard возвращает основное меню в виде инлайн-клавиатуры
 func getMainMenuKeyboard(isAdmin bool) tgbotapi.InlineKeyboardMarkup {
-	rows := [][]tgbotapi.InlineKeyboardButton{
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Статус", "status"),
-			tgbotapi.NewInlineKeyboardButtonData("Клиенты", "clients"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Привязать устройство", "bind"),
-			tgbotapi.NewInlineKeyboardButtonData("Отвязать устройство", "unbind"),
-		),
-	}
+	var rows [][]tgbotapi.InlineKeyboardButton
+
 	if isAdmin {
-		// Добавляем кнопку "Добавить подписку" только для админа
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Добавить подписку", "addsub"),
-		))
+		rows = [][]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Статус", "status"),
+				tgbotapi.NewInlineKeyboardButtonData("Клиенты", "clients"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Привязать устройство", "bind"),
+				tgbotapi.NewInlineKeyboardButtonData("Отвязать устройство", "unbind"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Добавить подписку", "addsub"),
+			),
+		}
+	} else {
+		rows = [][]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Статус", "status"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Привязать устройство", "bind"),
+				tgbotapi.NewInlineKeyboardButtonData("Отвязать устройство", "unbind"),
+			),
+		}
 	}
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -848,7 +859,17 @@ func checkSubscriptionReminders(bot *tgbotapi.BotAPI, db *gorm.DB) {
 				continue
 			}
 
-			text := fmt.Sprintf("⏳ У вас заканчивается подписка через %d день(дней). Для продления напишите в личные сообщения @GooogeR", daysLeft)
+			var text string
+			switch daysLeft {
+			case 1:
+				text = "⏳ У вас заканчивается подписка через 1 день. Для продления напишите в личные сообщения @GooogeR"
+			case 3:
+				text = "⏳ У вас заканчивается подписка через 3 дня. Для продления напишите в личные сообщения @GooogeR"
+			case 7:
+				text = "⏳ У вас заканчивается подписка через 7 дней. Для продления напишите в личные сообщения @GooogeR"
+			default:
+				text = fmt.Sprintf("⏳ У вас заканчивается подписка через %d дней. Для продления напишите в личные сообщения @GooogeR", daysLeft)
+			}
 			msg := tgbotapi.NewMessage(sub.User.TelegramID, text)
 			if _, err := bot.Send(msg); err != nil {
 				log.Printf("Ошибка отправки напоминания пользователю %d: %v", sub.User.TelegramID, err)
