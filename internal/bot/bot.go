@@ -985,8 +985,8 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 
 func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, adminTelegramID int64) {
 	chatID := update.Message.Chat.ID
-	text := update.Message.Text
 	telegramID := update.Message.From.ID
+	text := update.Message.Text
 
 	if telegramID != adminTelegramID {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
@@ -1016,7 +1016,7 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	// Подгружаем список пользователей из базы
+	// Получаем всех пользователей из базы
 	var users []models.User
 	if err := db.Find(&users).Error; err != nil || len(users) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка получения списка клиентов или список пуст"))
@@ -1030,31 +1030,40 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 
 	user := users[userIndex-1]
 
+	now := time.Now()
+
 	var sub models.Subscription
-	err = db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).Order("expires_at DESC").First(&sub).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			sub = models.Subscription{
-				UserID:    user.ID,
-				ExpiresAt: date,
-				Title:     "Подписка",
-				CreatedAt: time.Now(),
-			}
-			if err := db.Create(&sub).Error; err != nil {
-				bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки"))
-				return
-			}
-		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при поиске подписки"))
+	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).
+		Order("expires_at DESC").
+		First(&sub).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// Создаем новую подписку
+		newSub := models.Subscription{
+			UserID:    user.ID,
+			Title:     "Подписка",
+			ExpiresAt: date,
+			CreatedAt: now,
+		}
+		if err := db.Create(&newSub).Error; err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки."))
 			return
 		}
+	} else if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных."))
+		return
 	} else {
+		// Обновляем подписку на новую дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки."))
 			return
 		}
 	}
 
-	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка пользователя @%s успешно обновлена до %s", user.Username, date.Format("02-01-2006"))))
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
+		"✅ Подписка пользователя @%s успешно установлена до %s",
+		user.Username, date.Format("02-01-2006")))
+	msg.ReplyMarkup = getMainMenuKeyboard(true)
+	bot.Send(msg)
 }
