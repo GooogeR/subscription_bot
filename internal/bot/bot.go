@@ -1023,6 +1023,7 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
+	// Получаем список пользователей из базы
 	var users []models.User
 	if err := db.Find(&users).Error; err != nil {
 		log.Printf("Ошибка при получении пользователей из базы: %v", err)
@@ -1040,13 +1041,11 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	// Проверка пользователя по индексу
 	user := users[userIndex-1]
 
-	// Дата сейчас
 	now := time.Now()
 
-	// Поиск подписки, которая не просрочена
+	// Теперь отдельно ищем подписку
 	var sub models.Subscription
 	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).
 		Order("expires_at DESC").
@@ -1061,19 +1060,26 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 			CreatedAt: now,
 		}
 		if err := db.Create(&newSub).Error; err != nil {
+			log.Printf("Ошибка при создании подписки: %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки."))
 			return
 		}
 	} else if err != nil {
-		// Какая-то другая ошибка базы
+		// Другая ошибка базы
+		log.Printf("Ошибка при поиске подписки: %v", err)
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных."))
 		return
 	} else {
 		// Подписка есть — обновляем дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
+			log.Printf("Ошибка при обновлении подписки: %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки."))
 			return
 		}
 	}
+
+	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf(
+		"✅ Подписка пользователя @%s успешно установлена до %s",
+		user.Username, date.Format("02-01-2006"))))
 }
