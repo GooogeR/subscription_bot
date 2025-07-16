@@ -1022,19 +1022,24 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 	err = db.Where("user_id = ? AND expires_at > ?", user.ID, time.Now()).Order("expires_at DESC").First(&sub).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Подписка не найдена — создаём новую с нужной датой
 			sub = models.Subscription{
 				UserID:    user.ID,
 				ExpiresAt: date,
+				Title:     "Подписка", // Если есть поле Title, добавь здесь
+				CreatedAt: time.Now(),
 			}
 			if err := db.Create(&sub).Error; err != nil {
 				bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки"))
 				return
 			}
 		} else {
+			// Другие ошибки — логируем и сообщаем
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при поиске подписки"))
 			return
 		}
 	} else {
+		// Подписка есть — обновляем дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
