@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 )
 
+var adminTelegramID int64
 var addSubStep = make(map[int64]string)
 var cachedUsers = make(map[int64][]models.User)
 var selectedUserIndex = make(map[int64]int)
@@ -177,6 +178,10 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						delete(pendingBindKey, telegramID)
 						return
 					}
+				}
+				if update.Message != nil && strings.HasPrefix(update.Message.Text, "/setsub") {
+					handleSetSubCommand(bot, update, db)
+					return
 				}
 
 				// Обработка состояния добавления подписки
@@ -981,4 +986,59 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 		}
 	}
 	return result
+}
+func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB) {
+	chatID := update.Message.Chat.ID
+	telegramID := update.Message.From.ID
+	text := update.Message.Text
+
+	if telegramID == adminTelegramID {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
+		return
+	}
+
+	parts := strings.Fields(text)
+	if len(parts) != 3 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат. Используйте: /setsub <номер_пользователя> <дд-мм-гггг>"))
+		return
+	}
+
+	userIndex, err := strconv.Atoi(parts[1])
+	if err != nil || userIndex < 1 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный номер пользователя"))
+		return
+	}
+
+	date, err := time.Parse("02-01-2006", parts[2])
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат даты. Используйте дд-мм-гггг"))
+		return
+	}
+
+	if date.Before(time.Now()) {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Дата не может быть в прошлом"))
+		return
+	}
+
+	// Допустим, cachedUsers[telegramID] — твой список клиентов
+	users, ok := cachedUsers[telegramID]
+	if !ok || userIndex > len(users) {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден"))
+		return
+	}
+
+	user := users[userIndex-1]
+
+	// Обновить подписку в базе (пример)
+	sub := models.Subscription{
+		UserID:    user.ID,
+		ExpiresAt: date,
+	}
+	err = db.Save(&sub).Error
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
+		return
+	}
+
+	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Подписка для %s обновлена до %s", user.Username, date.Format("02-01-2006"))))
 }
