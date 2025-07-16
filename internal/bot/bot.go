@@ -281,6 +281,8 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					} else {
 						handleAdminAddSubCommand(bot, chatID, db, text)
 					}
+				case strings.HasPrefix(text, "/setsub"):
+					handleSetSubCommand(bot, update, db, adminTelegramID)
 
 				case strings.HasPrefix(text, "/admin genconf"):
 					if telegramID != adminTelegramID {
