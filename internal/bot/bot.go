@@ -20,6 +20,9 @@ var addSubStep = make(map[int64]string)
 var cachedUsers = make(map[int64][]models.User)
 var selectedUserIndex = make(map[int64]int)
 
+var bindStep = make(map[int64]string)
+var pendingBindKey = make(map[int64]string)
+
 func RunBot(db *gorm.DB, adminTelegramID int64) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
@@ -59,6 +62,76 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 				userName := update.Message.From.UserName
 				telegramID := update.Message.From.ID
 				text := update.Message.Text
+
+				if step, ok := bindStep[telegramID]; ok {
+					switch step {
+					case "awaiting_public_key":
+						publicKey := strings.TrimSpace(text)
+						if len(publicKey) != 44 {
+							bot.Send(tgbotapi.NewMessage(chatID, "❌ Public Key должен быть длиной 44 символа. Попробуйте снова."))
+							return
+						}
+
+						var existing models.Device
+						err := db.Where("public_key = ?", publicKey).First(&existing).Error
+						if err == nil {
+							bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Устройство с таким ключом уже привязано."))
+							delete(bindStep, telegramID)
+							return
+						} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+							bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при проверке ключа. Попробуйте позже."))
+							delete(bindStep, telegramID)
+							return
+						}
+
+						pendingBindKey[telegramID] = publicKey
+						bindStep[telegramID] = "awaiting_device_name"
+						bot.Send(tgbotapi.NewMessage(chatID, "✍️ Введите название устройства."))
+						return
+
+					case "awaiting_device_name":
+						deviceName := strings.TrimSpace(text)
+						if deviceName == "" {
+							bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Название устройства не может быть пустым. Попробуйте снова."))
+							return
+						}
+
+						publicKey, ok := pendingBindKey[telegramID]
+						if !ok {
+							bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Public Key не найден. Начните процесс заново."))
+							delete(bindStep, telegramID)
+							return
+						}
+
+						var user models.User
+						if err := db.First(&user, "telegram_id = ?", telegramID).Error; err != nil {
+							bot.Send(tgbotapi.NewMessage(chatID, "Вы ещё не зарегистрированы. Напишите /start"))
+							delete(bindStep, telegramID)
+							delete(pendingBindKey, telegramID)
+							return
+						}
+
+						device := models.Device{
+							UserID:     user.ID,
+							PublicKey:  publicKey,
+							DeviceName: deviceName,
+							CreatedAt:  time.Now(),
+						}
+
+						if err := db.Create(&device).Error; err != nil {
+							bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при сохранении устройства. Попробуйте позже."))
+						} else {
+							msg := tgbotapi.NewMessage(chatID,
+								fmt.Sprintf("✅ Устройство *%s* успешно привязано!\n🔐 Public Key: `%s`", deviceName, publicKey))
+							msg.ParseMode = "Markdown"
+							bot.Send(msg)
+						}
+
+						delete(bindStep, telegramID)
+						delete(pendingBindKey, telegramID)
+						return
+					}
+				}
 
 				// Обработка состояния добавления подписки
 				if step, ok := addSubStep[telegramID]; ok && step == "awaiting_user_selection" {
@@ -214,8 +287,8 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						handleClientsCommand(bot, chatID, db)
 					}
 				case "bind":
-					msg := tgbotapi.NewMessage(chatID, "Чтобы привязать устройство, отправьте команду в формате:\n/bind <ваш_public_key> <название устройства>")
-					msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
+					bindStep[telegramID] = "awaiting_public_key"
+					msg := tgbotapi.NewMessage(chatID, "🔐 Введите ваш Public Key (44 символа).")
 					bot.Send(msg)
 				case "unbind":
 					if telegramID != adminTelegramID {
