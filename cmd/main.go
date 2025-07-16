@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"subscription_bot/internal/bot"
+	"subscription_bot/internal/models"
 
 	"github.com/joho/godotenv"
 	"gorm.io/driver/sqlite"
@@ -31,6 +32,11 @@ func main() {
 	db, err := gorm.Open(sqlite.Open("subscription_bot.db"), &gorm.Config{})
 	if err != nil {
 		log.Fatal("Не удалось подключиться к базе данных:", err)
+	}
+
+	// Добавляем миграцию таблиц
+	if err := db.AutoMigrate(&models.User{}, &models.Subscription{}, &models.Device{}); err != nil {
+		log.Fatal("Ошибка миграции базы данных:", err)
 	}
 
 	bot.RunBot(db, adminTelegramID)

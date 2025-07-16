@@ -8,12 +8,14 @@ import (
 )
 
 func InitDB() (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open("subscription.db"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("subscription_bot.db"), &gorm.Config{})
 	if err != nil {
 		return nil, err
 	}
 
-	db.AutoMigrate(&models.User{}, &models.Subscription{})
+	if err := db.AutoMigrate(&models.User{}, &models.Subscription{}, &models.Device{}); err != nil {
+		return nil, err
+	}
 
 	return db, nil
 }
