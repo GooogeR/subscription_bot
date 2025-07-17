@@ -179,7 +179,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						return
 					}
 				}
-				if update.Message != nil && strings.HasPrefix(update.Message.Text, "/setsub") {
+				if strings.HasPrefix(text, "/setsub") {
 					handleSetSubCommand(bot, update, db, adminTelegramID)
 					return
 				}
@@ -281,8 +281,6 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 					} else {
 						handleAdminAddSubCommand(bot, chatID, db, text)
 					}
-				case strings.HasPrefix(text, "/setsub"):
-					handleSetSubCommand(bot, update, db, adminTelegramID)
 
 				case strings.HasPrefix(text, "/admin genconf"):
 					if telegramID != adminTelegramID {
@@ -1017,31 +1015,22 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 		return
 	}
 
-	log.Printf("Поиск пользователя с telegram_id = %d", targetTelegramID)
-
 	var user models.User
-	err = db.Where("telegram_id = ?", targetTelegramID).First(&user).Error
-	if err != nil {
+	if err := db.Where("telegram_id = ?", targetTelegramID).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Printf("Пользователь с telegram_id=%d не найден в базе", targetTelegramID)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден"))
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден в базе"))
 		} else {
-			log.Printf("Ошибка поиска пользователя: %v", err)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных"))
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при поиске пользователя в базе"))
 		}
 		return
 	}
 
-	now := time.Now()
-
-	// Ищем активную подписку
 	var sub models.Subscription
-	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).
-		Order("expires_at DESC").
-		First(&sub).Error
+	now := time.Now()
+	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).Order("expires_at DESC").First(&sub).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// Создаём новую подписку
+		// Создаем новую подписку
 		newSub := models.Subscription{
 			UserID:    user.ID,
 			Title:     "Подписка",
@@ -1049,22 +1038,22 @@ func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.
 			CreatedAt: now,
 		}
 		if err := db.Create(&newSub).Error; err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки."))
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки"))
 			return
 		}
-	} else if err != nil {
-		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных."))
-		return
-	} else {
-		// Обновляем дату подписки
+	} else if err == nil {
+		// Обновляем дату
 		sub.ExpiresAt = date
 		if err := db.Save(&sub).Error; err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки."))
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
 			return
 		}
+	} else {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных"))
+		return
 	}
 
 	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf(
-		"✅ Подписка пользователя @%s успешно установлена до %s",
+		"✅ Подписка пользователя @%s установлена до %s",
 		user.Username, date.Format("02-01-2006"))))
 }
