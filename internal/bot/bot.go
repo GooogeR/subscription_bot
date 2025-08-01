@@ -179,6 +179,10 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						return
 					}
 				}
+				if strings.HasPrefix(text, "/setsub") {
+					handleSetSubCommand(bot, update, db, adminTelegramID)
+					return
+				}
 				// Обработка состояния добавления подписки
 				if step, ok := addSubStep[telegramID]; ok && step == "awaiting_user_selection" {
 					num, err := strconv.Atoi(text)
@@ -269,7 +273,7 @@ func RunBot(db *gorm.DB, adminTelegramID int64) {
 						handleAdminUsersCommand(bot, chatID, db, adminTelegramID)
 					}
 
-				case strings.HasPrefix(text, "/addsub"):
+				case strings.HasPrefix(text, "/admin addsub"):
 					if telegramID != adminTelegramID {
 						msg := tgbotapi.NewMessage(chatID, "❌ У вас нет прав для выполнения этой команды.")
 						msg.ReplyMarkup = getMainMenuKeyboard(telegramID == adminTelegramID)
@@ -647,7 +651,7 @@ func handleBindCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, telegram
 func handleAdminAddSubCommand(bot *tgbotapi.BotAPI, chatID int64, db *gorm.DB, text string) {
 	parts := strings.SplitN(text, " ", 5)
 	if len(parts) < 5 {
-		msg := tgbotapi.NewMessage(chatID, "Неверный формат команды.\nИспользование: /addsub <telegramID> <дни> <название подписки>")
+		msg := tgbotapi.NewMessage(chatID, "Неверный формат команды.\nИспользование: /admin addsub <telegramID> <дни> <название подписки>")
 		msg.ReplyMarkup = getMainMenuKeyboard(true)
 		bot.Send(msg)
 		return
@@ -977,4 +981,79 @@ func parseUnlimitedUsers(env string) map[int64]bool {
 		}
 	}
 	return result
+}
+
+func handleSetSubCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, adminTelegramID int64) {
+	chatID := update.Message.Chat.ID
+	telegramID := update.Message.From.ID
+
+	if telegramID != adminTelegramID {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Команда доступна только администратору"))
+		return
+	}
+
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) != 3 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат. Используйте: /setsub <telegram_id> <дд-мм-гггг>"))
+		return
+	}
+
+	targetTelegramID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || targetTelegramID <= 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный Telegram ID пользователя"))
+		return
+	}
+
+	date, err := time.Parse("02-01-2006", parts[2])
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Неверный формат даты. Используйте дд-мм-гггг"))
+		return
+	}
+
+	if date.Before(time.Now()) {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Дата не может быть в прошлом"))
+		return
+	}
+
+	var user models.User
+	if err := db.Where("telegram_id = ?", targetTelegramID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Пользователь не найден в базе"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при поиске пользователя в базе"))
+		}
+		return
+	}
+
+	var sub models.Subscription
+	now := time.Now()
+	err = db.Where("user_id = ? AND expires_at > ?", user.ID, now).Order("expires_at DESC").First(&sub).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// Создаем новую подписку
+		newSub := models.Subscription{
+			UserID:    user.ID,
+			Title:     "Подписка",
+			ExpiresAt: date,
+			CreatedAt: now,
+		}
+		if err := db.Create(&newSub).Error; err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при создании подписки"))
+			return
+		}
+	} else if err == nil {
+		// Обновляем дату
+		sub.ExpiresAt = date
+		if err := db.Save(&sub).Error; err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при обновлении подписки"))
+			return
+		}
+	} else {
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка базы данных"))
+		return
+	}
+
+	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf(
+		"✅ Подписка пользователя @%s установлена до %s",
+		user.Username, date.Format("02-01-2006"))))
 }
